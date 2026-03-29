@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.wav
+backend/voices/streaming_model/*.pt
+backend/storage/outputs/*.wav
+.DS_Store
