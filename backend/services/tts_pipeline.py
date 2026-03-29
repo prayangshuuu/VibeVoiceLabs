@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from config import Settings
 from domain.models import InferenceRequest, InferenceResult
 from infra.cache.memory import GenerationCache, tts_cache_key
+from infra.cluster.jobs import Job
 from infra.queue.in_memory import InMemoryJobQueue, TTSJob
 from services.inference.router import InferenceRouter
 from services.voice.manager import VoiceManager
+
+if TYPE_CHECKING:
+    from workers.supervisor import ClusterSupervisor
 
 
 def _outputs_dir(settings: Settings) -> Path:
@@ -23,7 +27,8 @@ async def run_tts(
     settings: Settings,
     voice_manager: VoiceManager,
     inference_router: InferenceRouter,
-    job_queue: InMemoryJobQueue,
+    job_queue: Optional[InMemoryJobQueue],
+    cluster_supervisor: Optional[ClusterSupervisor],
     generation_cache: Optional[GenerationCache],
     text: str,
     voice: Optional[str],
@@ -52,7 +57,12 @@ async def run_tts(
         def run() -> InferenceResult:
             return inference_router.generate_with_resilience_sync(req, request_id=request_id)
 
-        result = await job_queue.enqueue(TTSJob(run=run, label="tts"))
+        if settings.cluster_enabled and cluster_supervisor is not None:
+            result = await cluster_supervisor.enqueue_job(Job.new_tts(run_sync=run, request_id=request_id))
+        elif job_queue is not None:
+            result = await job_queue.enqueue(TTSJob(run=run, label="tts"))
+        else:
+            result = await inference_router.generate_with_resilience(req, request_id=request_id)
     else:
         result = await inference_router.generate_with_resilience(req, request_id=request_id)
 

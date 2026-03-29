@@ -55,9 +55,18 @@ class Settings:
     cache_max_entries: int = field(default_factory=lambda: _env_int("TTS_CACHE_MAX_ENTRIES", 128))
     streaming_enabled: bool = field(default_factory=lambda: _env_bool("STREAMING_ENABLED", True))
 
-    # Worker queue
+    # Worker queue / distributed cluster (simulated locally, no Redis)
     worker_concurrency: int = field(default_factory=lambda: max(1, _env_int("TTS_WORKER_CONCURRENCY", 2)))
     tts_via_worker_queue: bool = field(default_factory=lambda: _env_bool("TTS_VIA_WORKER_QUEUE", True))
+    cluster_enabled: bool = field(default_factory=lambda: _env_bool("CLUSTER_ENABLED", True))
+    cluster_initial_workers: int = field(default_factory=lambda: max(1, _env_int("CLUSTER_INITIAL_WORKERS", 3)))
+    cluster_min_workers: int = field(default_factory=lambda: max(1, _env_int("CLUSTER_MIN_WORKERS", 1)))
+    cluster_max_workers: int = field(default_factory=lambda: max(1, _env_int("CLUSTER_MAX_WORKERS", 8)))
+    autoscaler_queue_scale_up_threshold: int = field(
+        default_factory=lambda: max(1, _env_int("AUTOSCALER_QUEUE_THRESHOLD", 10))
+    )
+    autoscaler_tick_s: float = field(default_factory=lambda: max(0.25, _env_float("AUTOSCALER_TICK_S", 2.0)))
+    model_memory_budget_gb: float = field(default_factory=lambda: max(1.0, _env_float("MODEL_MEMORY_BUDGET_GB", 24.0)))
 
     # Resilience
     generation_max_retries: int = field(default_factory=lambda: max(0, _env_int("GENERATION_MAX_RETRIES", 2)))

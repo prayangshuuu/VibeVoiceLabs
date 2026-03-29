@@ -17,6 +17,7 @@ class MetricsRegistry:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _latencies_ms: Deque[float] = field(default_factory=lambda: deque(maxlen=500))
     _gen_times_ms: Deque[float] = field(default_factory=lambda: deque(maxlen=500))
+    _cluster_job_s: Deque[float] = field(default_factory=lambda: deque(maxlen=500))
     _started: float = field(default_factory=time.perf_counter)
 
     def record_request(self, latency_ms: float, *, error: bool) -> None:
@@ -31,12 +32,19 @@ class MetricsRegistry:
             self.generations_total += 1
             self._gen_times_ms.append(duration_ms)
 
+    def record_cluster_job(self, duration_s: float) -> None:
+        with self._lock:
+            self._cluster_job_s.append(duration_s)
+
     def snapshot(self, queue_size: int = 0) -> Dict[str, object]:
         with self._lock:
             uptime = time.perf_counter() - self._started
             rps = self.requests_total / uptime if uptime > 0 else 0.0
             lat_avg = sum(self._latencies_ms) / len(self._latencies_ms) if self._latencies_ms else 0.0
             gen_avg = sum(self._gen_times_ms) / len(self._gen_times_ms) if self._gen_times_ms else 0.0
+            cluster_avg_s = (
+                sum(self._cluster_job_s) / len(self._cluster_job_s) if self._cluster_job_s else 0.0
+            )
             return {
                 "uptime_seconds": round(uptime, 3),
                 "requests_total": self.requests_total,
@@ -46,6 +54,7 @@ class MetricsRegistry:
                 "avg_request_latency_ms": round(lat_avg, 3),
                 "avg_generation_time_ms": round(gen_avg, 3),
                 "queue_size": queue_size,
+                "avg_cluster_job_latency_s": round(cluster_avg_s, 4),
             }
 
 

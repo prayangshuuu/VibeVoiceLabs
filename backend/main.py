@@ -22,9 +22,9 @@ from middleware.api_key import APIKeyMiddleware
 _PUBLIC_API_BASE = os.environ.get("PUBLIC_API_BASE_URL", "http://localhost:8000").rstrip("/")
 
 app = FastAPI(
-    title="VibeVoice TTS Platform",
-    description="Modular, observable TTS API (VibeVoice-Realtime-0.5B).",
-    version="1.0.0",
+    title="VibeVoiceLabs Inference Platform",
+    description="Multi-model TTS + ASR API with simulated distributed workers, queue routing, and autoscaling.",
+    version="1.1.0",
     lifespan=lifespan,
     servers=[{"url": _PUBLIC_API_BASE, "description": "Public API base (Swagger / clients)"}],
 )
@@ -67,6 +67,7 @@ def root():
         "api_v1": "/api/v1",
         "legacy": {
             "tts": "POST /tts",
+            "asr": "POST /asr",
             "voices": "GET /voices",
             "websocket": "WS /stream",
         },

@@ -16,10 +16,12 @@ from infra.cache.memory import GenerationCache
 from infra.model_loader import load_model
 from infra.queue.in_memory import InMemoryJobQueue
 from observability.metrics import get_metrics
+from services.models.manager import ModelManager
 from core.runtime_ctx import RuntimeContext, clear_runtime_context, set_runtime_context
 from services.inference.router import InferenceRouter
 from services.streaming.manager import StreamingSessionManager
 from services.voice.manager import VoiceManager
+from workers.supervisor import ClusterSupervisor
 from workers.tts_worker import start_tts_workers, stop_tts_workers
 
 logger = get_logger("vibevoice.lifecycle")
@@ -64,7 +66,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.metrics = get_metrics()
     app.state.voice_manager = VoiceManager(settings)
-    app.state.job_queue = InMemoryJobQueue()
+    model_manager = ModelManager(memory_budget_gb=settings.model_memory_budget_gb)
+    model_manager.ensure_tts()
+    app.state.model_manager = model_manager
     app.state.inference_router = InferenceRouter(settings, app.state.voice_manager)
     app.state.generation_cache = (
         GenerationCache(settings.cache_max_entries) if settings.caching_enabled else None
@@ -81,16 +85,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     stop_event = asyncio.Event()
     app.state.tts_stop_event = stop_event
-    app.state.tts_worker_tasks = await start_tts_workers(
-        app.state.job_queue,
-        stop_event,
-        concurrency=settings.worker_concurrency,
-    )
-    logger.info("TTS workers started (concurrency=%s)", settings.worker_concurrency)
+    app.state.tts_worker_tasks = []
+    app.state.cluster_supervisor = None
+    app.state.job_queue = None
+
+    if settings.cluster_enabled:
+        cluster = ClusterSupervisor(settings, model_manager)
+        app.state.cluster_supervisor = cluster
+        await cluster.start()
+        logger.info(
+            "Cluster supervisor online (initial_workers=%s, max=%s)",
+            settings.cluster_initial_workers,
+            settings.cluster_max_workers,
+        )
+    else:
+        app.state.job_queue = InMemoryJobQueue()
+        app.state.tts_worker_tasks = await start_tts_workers(
+            app.state.job_queue,
+            stop_event,
+            concurrency=settings.worker_concurrency,
+        )
+        logger.info("TTS workers started (concurrency=%s)", settings.worker_concurrency)
 
     yield
 
     stop_event.set()
-    await stop_tts_workers(app.state.tts_worker_tasks)
+    if app.state.cluster_supervisor is not None:
+        await app.state.cluster_supervisor.shutdown()
+    if app.state.tts_worker_tasks:
+        await stop_tts_workers(app.state.tts_worker_tasks)
     clear_runtime_context()
     logger.info("Shutdown complete")

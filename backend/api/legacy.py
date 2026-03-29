@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket
 
+from api.v1.endpoints.asr import post_asr_v1
 from api.v1.endpoints.stream import stream_ws_v1
 from api.v1.endpoints.tts import LegacyTTSResponse, TTSRequest, execute_tts
 from api.v1.endpoints.voices import api_voices
@@ -15,6 +16,12 @@ legacy_router = APIRouter(tags=["legacy"])
 @legacy_router.get("/voices")
 def legacy_voices(request: Request):
     return api_voices(request)
+
+
+@legacy_router.post("/asr")
+async def legacy_asr(request: Request, file: UploadFile = File(...)):
+    """Root-level ASR upload (multipart form field `file`)."""
+    return await post_asr_v1(request, file=file)
 
 
 @legacy_router.post("/tts", response_model=LegacyTTSResponse)

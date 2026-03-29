@@ -11,5 +11,12 @@ def prometheus_friendly_metrics(request: Request):
     if not settings.metrics_enabled:
         return {"enabled": False}
     m = request.app.state.metrics
-    q = request.app.state.job_queue.queue_size
+    cluster = getattr(request.app.state, "cluster_supervisor", None)
+    jq = getattr(request.app.state, "job_queue", None)
+    if cluster is not None:
+        q = cluster.queue_depth
+    elif jq is not None:
+        q = jq.queue_size
+    else:
+        q = 0
     return m.snapshot(queue_size=q)
