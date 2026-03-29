@@ -1,1 +1,1 @@
-# Services package for VibeVoice TTS backend.
+"""Application services."""

@@ -7,6 +7,8 @@ services:
       - "8000:8000"
     environment:
       VIBEVOICE_DEVICE: ${VIBEVOICE_DEVICE:-cpu}
+      # So /docs and OpenAPI "Try it out" use a browser-reachable host, not 0.0.0.0
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
     volumes:
       - backend_storage:/app/backend/storage/outputs
       - huggingface_cache:/app/.cache/huggingface

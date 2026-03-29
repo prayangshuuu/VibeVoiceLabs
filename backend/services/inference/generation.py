@@ -1,19 +1,20 @@
-"""TTS generation: chunking, optional multi-speaker lines, tensor -> PCM / WAV."""
+"""Low-level VibeVoice generation: chunking, tensors, WAV/PCM."""
 
 from __future__ import annotations
 
 import copy
 import re
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 import numpy as np
 import torch
 
-from services.model_loader import LoadedModel, get_loaded
-from services.voices import resolve_voice_path
+from domain.models import InferenceRequest
+from infra.model_loader import LoadedModel, get_loaded
+from observability.profiler import profile_chunk
+from services.voice.manager import VoiceManager
 
 SAMPLE_RATE = 24000
 
@@ -28,12 +29,10 @@ def normalize_text(text: str) -> str:
 
 
 def split_text_chunks(text: str, max_chars: int = 220) -> List[str]:
-    """Split into small segments for incremental synthesis (sentence-ish, capped)."""
     text = normalize_text(text)
     if not text:
         return []
 
-    # Prefer sentence boundaries
     parts = re.split(r"(?<=[.!?])\s+|\n+", text)
     chunks: List[str] = []
     buf = ""
@@ -55,7 +54,6 @@ def split_text_chunks(text: str, max_chars: int = 220) -> List[str]:
     if buf:
         chunks.append(buf)
 
-    # Merge very short tail chunks (model is less stable on ultra-short-only runs)
     merged: List[str] = []
     i = 0
     while i < len(chunks):
@@ -68,22 +66,18 @@ def split_text_chunks(text: str, max_chars: int = 220) -> List[str]:
     return [c for c in merged if c.strip()]
 
 
-@dataclass
 class SpeakerTurn:
-    speaker: str
-    text: str
+    __slots__ = ("speaker", "text")
+
+    def __init__(self, speaker: str, text: str) -> None:
+        self.speaker = speaker
+        self.text = text
 
 
 MULTI_SPEAKER_LINE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$")
 
 
 def parse_multi_speaker(text: str) -> List[SpeakerTurn]:
-    """
-    Parse lines like:
-      A: Hello there
-      B: Hi!
-    Unlabeled lines attach to the previous speaker or 'default'.
-    """
     lines = text.strip().splitlines()
     if not lines:
         return [SpeakerTurn("default", text)]
@@ -111,18 +105,12 @@ def parse_multi_speaker(text: str) -> List[SpeakerTurn]:
 def speaker_to_voice_id(speaker: str, mapping: Optional[Dict[str, str]]) -> str:
     if mapping and speaker in mapping:
         return mapping[speaker]
-    # Rotate through a small stable set by letter
     key = speaker.upper()
     pool = ["carter", "emma", "davis", "grace", "frank", "mike"]
     if len(key) == 1 and "A" <= key <= "Z":
         return pool[(ord(key) - ord("A")) % len(pool)]
     h = sum(ord(c) for c in speaker) % len(pool)
     return pool[h]
-
-
-def _load_voice_tensor(voice_path: str, device: str) -> Any:
-    target_device = device if device != "cpu" else "cpu"
-    return torch.load(voice_path, map_location=target_device, weights_only=False)
 
 
 def _generate_one(
@@ -146,16 +134,17 @@ def _generate_one(
         if torch.is_tensor(v):
             inputs[k] = v.to(target_device)
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=None,
-            cfg_scale=cfg_scale,
-            tokenizer=processor.tokenizer,
-            generation_config={"do_sample": False},
-            verbose=False,
-            all_prefilled_outputs=copy.deepcopy(prefilled) if prefilled is not None else None,
-        )
+    with profile_chunk("model.generate"):
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=None,
+                cfg_scale=cfg_scale,
+                tokenizer=processor.tokenizer,
+                generation_config={"do_sample": False},
+                verbose=False,
+                all_prefilled_outputs=copy.deepcopy(prefilled) if prefilled is not None else None,
+            )
     if not outputs.speech_outputs or outputs.speech_outputs[0] is None:
         raise RuntimeError("Model returned no speech audio.")
     return outputs.speech_outputs[0]
@@ -174,63 +163,85 @@ def concatenate_waveforms(parts: List[torch.Tensor]) -> torch.Tensor:
     return torch.cat(flat, dim=0)
 
 
-def synthesize_to_file(
-    text: str,
-    voice: Optional[str] = None,
-    cfg_scale: float = 1.5,
-    output_dir: Optional[Path] = None,
-    multi_speaker: bool = False,
-    speaker_voice_map: Optional[Dict[str, str]] = None,
+def synthesize_to_file_sync(
+    req: InferenceRequest,
+    *,
+    voice_manager: VoiceManager,
+    chunk_max_chars: int,
 ) -> str:
-    """Full pipeline: chunk text, generate, save outputs/<uuid>.wav."""
     loaded = get_loaded()
-    output_dir = output_dir or Path(__file__).resolve().parent.parent / "storage" / "outputs"
+    output_dir = req.output_dir or Path(__file__).resolve().parents[2] / "storage" / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
     out_name = f"{uuid.uuid4().hex}.wav"
     out_path = output_dir / out_name
 
-    if multi_speaker:
-        turns = parse_multi_speaker(text)
+    if req.multi_speaker:
+        turns = parse_multi_speaker(req.text)
         wave_parts: List[torch.Tensor] = []
         for turn in turns:
-            vid = speaker_to_voice_id(turn.speaker, speaker_voice_map)
-            vp = resolve_voice_path(vid)
-            prefilled = _load_voice_tensor(vp, loaded.device)
-            for chunk in split_text_chunks(turn.text):
-                w = _generate_one(loaded, chunk, prefilled, cfg_scale)
+            vid = speaker_to_voice_id(turn.speaker, req.speaker_voice_map)
+            prefilled = voice_manager.get_prefilled(vid, loaded.device)
+            for chunk in split_text_chunks(turn.text, chunk_max_chars):
+                w = _generate_one(loaded, chunk, prefilled, req.cfg_scale)
                 wave_parts.append(w)
         full = concatenate_waveforms(wave_parts)
     else:
-        vp = resolve_voice_path(voice)
-        prefilled = _load_voice_tensor(vp, loaded.device)
+        prefilled = voice_manager.get_prefilled(req.voice, loaded.device)
         wave_parts = []
-        for chunk in split_text_chunks(text):
-            w = _generate_one(loaded, chunk, prefilled, cfg_scale)
+        for chunk in split_text_chunks(req.text, chunk_max_chars):
+            w = _generate_one(loaded, chunk, prefilled, req.cfg_scale)
             wave_parts.append(w)
         full = concatenate_waveforms(wave_parts)
 
-    loaded.processor.save_audio(full, output_path=str(out_path), sampling_rate=SAMPLE_RATE, normalize=False)
+    loaded.processor.save_audio(
+        full, output_path=str(out_path), sampling_rate=SAMPLE_RATE, normalize=False
+    )
     return str(out_path)
 
 
 def synthesize_stream_pcm(
     text: str,
-    voice: Optional[str] = None,
-    cfg_scale: float = 1.5,
+    voice_manager: VoiceManager,
+    voice: Optional[str],
+    cfg_scale: float,
+    chunk_max_chars: int,
+    *,
+    multi_speaker: bool = False,
+    speaker_voice_map: Optional[Dict[str, str]] = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    """Yields event dicts: {type: progress|audio_meta|audio_bytes|done, ...}."""
     loaded = get_loaded()
-    vp = resolve_voice_path(voice)
-    prefilled = _load_voice_tensor(vp, loaded.device)
-    chunks = split_text_chunks(text)
-    yield {"type": "progress", "stage": "start", "message": "Queued synthesis", "demo": True}
-    for i, chunk in enumerate(chunks):
+    chunks_meta: List[tuple[str, Optional[str]]] = []
+
+    if multi_speaker:
+        turns = parse_multi_speaker(text)
+        for turn in turns:
+            vid = speaker_to_voice_id(turn.speaker, speaker_voice_map)
+            for ch in split_text_chunks(turn.text, chunk_max_chars):
+                chunks_meta.append((ch, vid))
+    else:
+        for ch in split_text_chunks(text, chunk_max_chars):
+            chunks_meta.append((ch, voice))
+
+    yield {
+        "type": "progress",
+        "stage": "start",
+        "message": "Queued synthesis",
+        "total_chunks": len(chunks_meta),
+        "demo": True,
+    }
+    current_vid: Optional[str] = None
+    prefilled: Any = None
+
+    for i, (chunk, vid) in enumerate(chunks_meta):
+        if vid != current_vid:
+            current_vid = vid
+            prefilled = voice_manager.get_prefilled(vid, loaded.device)
         yield {
             "type": "progress",
             "stage": "chunk",
             "chunk_index": i,
-            "total_chunks": len(chunks),
-            "message": f"Generating segment {i + 1} of {len(chunks)}",
+            "total_chunks": len(chunks_meta),
+            "message": f"Generating segment {i + 1} of {len(chunks_meta)}",
             "demo": True,
         }
         w = _generate_one(loaded, chunk, prefilled, cfg_scale)

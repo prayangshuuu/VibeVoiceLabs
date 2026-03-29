@@ -10,9 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import torch
 
 if TYPE_CHECKING:
-    from vibevoice.modular.modeling_vibevoice_streaming_inference import (
-        VibeVoiceStreamingForConditionalGenerationInference,
-    )
+    pass
 
 
 def get_device() -> str:
