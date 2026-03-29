@@ -17,6 +17,10 @@ router = APIRouter(tags=["tts"])
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Text to synthesize")
     voice: Optional[str] = Field(None, description="Preset id, e.g. carter, emma")
+    mode: Optional[str] = Field(
+        None,
+        description="UI preset: default, podcast, narration (optional; does not change model weights)",
+    )
     cfg_scale: float = Field(1.5, ge=0.5, le=3.0)
     multi_speaker: bool = Field(
         False,

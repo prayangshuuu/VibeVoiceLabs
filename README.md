@@ -48,6 +48,25 @@ uvicorn main:app --reload
 
 Open **http://127.0.0.1:8000/docs** for interactive OpenAPI.
 
+### Frontend (Next.js 14)
+
+From the **`frontend`** directory:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open **http://localhost:3000** — marketing site at `/`, app at **`/dashboard`**.
+
+Optional env (defaults match local backend):
+
+- `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000`
+- `NEXT_PUBLIC_WS_URL=ws://127.0.0.1:8000/stream`
+
+The API enables CORS for `http://localhost:3000` and `http://127.0.0.1:3000`.
+
 ## Environment variables
 
 | Variable | Description |
