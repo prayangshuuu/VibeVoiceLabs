@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      VIBEVOICE_DEVICE: ${VIBEVOICE_DEVICE:-cpu}
+    volumes:
+      - backend_storage:/app/backend/storage/outputs
+      - huggingface_cache:/app/.cache/huggingface
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/stream}
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend_storage:
+  huggingface_cache:

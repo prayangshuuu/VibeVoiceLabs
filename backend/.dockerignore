@@ -1,0 +1,7 @@
+__pycache__
+*.py[cod]
+*.wav
+storage/outputs/*.wav
+voices/streaming_model/*.pt
+.env
+.venv

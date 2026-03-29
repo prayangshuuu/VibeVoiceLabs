@@ -5,3 +5,4 @@ __pycache__/
 backend/voices/streaming_model/*.pt
 backend/storage/outputs/*.wav
 .DS_Store
+.env

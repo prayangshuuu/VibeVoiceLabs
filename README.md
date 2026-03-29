@@ -67,6 +67,33 @@ Optional env (defaults match local backend):
 
 The API enables CORS for `http://localhost:3000` and `http://127.0.0.1:3000`.
 
+## Docker (full stack on macOS / Apple Silicon)
+
+Run **backend + frontend** with one command (Docker Compose). Containers are **Linux**, so PyTorch runs on **CPU** inside Docker — **MPS is not available** in containers on macOS. For native **MPS**, run the backend on the host instead of Docker.
+
+1. Copy environment file:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Build and start:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Open:
+
+   - **Frontend:** [http://localhost:3000](http://localhost:3000) (dashboard at `/dashboard`)
+   - **Backend API docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+**Networking:** The browser must call the API at **`http://localhost:8000`** (published port). Do **not** set `NEXT_PUBLIC_API_URL` to `http://backend:8000` — that hostname only exists inside the Compose network, not in your browser.
+
+**Volumes:** `backend_storage` persists generated WAV files; `huggingface_cache` persists downloaded model weights between runs.
+
+**Files:** `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile`, `.env.example`, `.dockerignore`.
+
 ## Environment variables
 
 | Variable | Description |
